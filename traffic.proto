@@ -1,0 +1,71 @@
+syntax = "proto3";
+package junction;
+
+message Empty {}
+message Ack {
+  bool ok = 1;
+  string message = 2;
+}
+message Arrival {
+  string lane = 1;
+  string car_id = 2;
+  string trip_id = 3;
+}
+message VehicleRequest {
+  string lane = 1;
+  string trip_id = 2;
+}
+message JoinReply {
+  bool accepted = 1;
+  string message = 2;
+  int32 queue_position = 3;
+}
+message Permission {
+  bool granted = 1;
+  string state = 2;
+  string message = 3;
+  double crossing_seconds = 4;
+  int32 queue_position = 5;
+}
+message LightRequest { string lane = 1; }
+message LightStatus {
+  string lane = 1;
+  string color = 2;
+  int32 waiting = 3;
+  int32 passed_on_green = 4;
+  string crossing_car = 5;
+  double cooldown_remaining = 6;
+}
+message LaneInfo {
+  string lane = 1;
+  string color = 2;
+  int32 waiting = 3;
+  int32 passed_on_green = 4;
+}
+message JunctionSnapshot {
+  repeated LaneInfo lanes = 1;
+  string current_car = 2;
+  string current_lane = 3;
+  int32 total_crossed = 4;
+  double cooldown_remaining = 5;
+  double t_seconds = 6;
+  string current_trip = 7;
+}
+
+// The coordinator is authoritative for all synchronization decisions.
+service Coordinator {
+  rpc Heartbeat(LightRequest) returns (Empty);
+  rpc Join(Arrival) returns (JoinReply);
+  rpc RequestPass(VehicleRequest) returns (Permission);
+  rpc Finish(VehicleRequest) returns (Ack);
+  rpc Status(LightRequest) returns (LightStatus);
+  rpc Snapshot(Empty) returns (JunctionSnapshot);
+}
+
+// Each traffic light is a separate network server used by vehicles.
+service TrafficLight {
+  rpc Arrive(Arrival) returns (JoinReply);
+  rpc RequestPass(VehicleRequest) returns (Permission);
+  rpc Finish(VehicleRequest) returns (Ack);
+  rpc Status(Empty) returns (LightStatus);
+}
