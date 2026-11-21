@@ -68,8 +68,10 @@ python -m pip install -r requirements.txt
 **1) Laptop 1: start the coordinator FIRST:**
 
 ```bash
-python coordinator.py --bind 192.168.1.10:50050 --lights A=192.168.1.11 B=192.168.1.12 C=192.168.1.13 --t 3 --max-passes 10
+python coordinator.py --bind 192.168.1.10:50050 --lights A=192.168.1.11 B=192.168.1.12 C=192.168.1.13 --t 3 --max-passes 10 --dashboard 8080
 ```
+
+Open [the graphical dashboard](http://127.0.0.1:8080) in a browser on Laptop 1. The dashboard shows the signal color and heartbeat status of each light computer, waiting cars by lane, the car crossing the junction, and completed crossings.
 
 **2) Laptop 2: start Light A:**
 
@@ -97,13 +99,21 @@ Each light listens on TCP 50051, with one light process per laptop. The coordina
 python spawn_cars.py --cars 6 --trips 5 --lights A=192.168.1.11:50051 B=192.168.1.12:50051 C=192.168.1.13:50051
 ```
 
-**6) On any laptop, open the optional dashboard:**
+**6) On any laptop, you can also run the optional terminal monitor:**
 
 ```bash
 python monitor.py --coordinator 192.168.1.10:50050
 ```
 
 Use `Ctrl+C` to stop the servers. On different computers, each terminal must stay running while the demo is active.
+
+### Preview the graphical dashboard on one computer
+
+```bash
+python coordinator.py --demo
+```
+
+Open [the local demo](http://127.0.0.1:8080). The demo runs the coordinator with simulated lights and cars. Add `--dashboard 8081` and open port 8081 if port 8080 is occupied.
 
 ### Run individual vehicles on different laptops instead
 
@@ -162,6 +172,7 @@ The test harness uses local sockets to check the gRPC protocol and simulated net
 | `vehicle.py` | Independently running vehicle node / gRPC client |
 | `spawn_cars.py` | Launch 3+ car processes simultaneously |
 | `monitor.py` | Live gRPC-based terminal dashboard |
+| `dashboard.py`, `dashboard.html` | Coordinator-hosted graphical dashboard and local demo |
 | `network.py` | Validate the LAN addresses used by the coordinator and lights |
 | `test_protocol.py` | Automated integration and safety tests |
 | `requirements.txt` | Runtime libraries |

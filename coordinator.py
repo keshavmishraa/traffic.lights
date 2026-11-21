@@ -17,6 +17,7 @@ import argparse
 from collections import deque
 from concurrent import futures
 from dataclasses import dataclass
+from itertools import islice
 import logging
 import threading
 import time
@@ -56,6 +57,7 @@ class CoordinatorService:
         self.last_exit_at: float | None = None
         self.passed_this_green = 0
         self.total_crossed = 0
+        self.recent_crossings = deque(maxlen=6)
 
     def _require_light(self, lane, context):
         if lane not in LANES:
@@ -189,6 +191,7 @@ class CoordinatorService:
             self.active_trip = None
             self.last_exit_at = now
             self.total_crossed += 1
+            self.recent_crossings.append({"car": trip.car_id, "lane": trip.lane})
             self.passed_this_green += 1
             LOG.info("EXIT   %-12s lane=%s total=%d green_turn_count=%d",
                      trip.car_id, trip.lane, self.total_crossed, self.passed_this_green)
@@ -231,36 +234,99 @@ class CoordinatorService:
             )
 
 
-def serve(bind: str, crossing_time: float, max_passes: int, light_ips: dict[str, str]):
-    for ip in light_ips.values():
-        require_remote(ip)
+    def dashboard_state(self):
+        with self.lock:
+            snapshot = self.Snapshot(pb.Empty(), None)
+            now = time.monotonic()
+            active = self.trips.get(self.active_trip)
+            lanes = []
+            for light in snapshot.lanes:
+                heartbeat = self.last_heartbeat.get(light.lane)
+                lanes.append({
+                    "lane": light.lane,
+                    "color": light.color,
+                    "ip": self.light_ips[light.lane],
+                    "connection": "Waiting" if heartbeat is None else
+                        "Online" if now - heartbeat < HEARTBEAT_TIMEOUT else "Offline",
+                    "waiting": light.waiting,
+                    "cars": [self.trips[trip_id].car_id for trip_id in islice(self.queues[light.lane], 6)],
+                })
+            return {
+                "lanes": lanes,
+                "current_car": snapshot.current_car,
+                "current_lane": snapshot.current_lane,
+                "progress": min(1, (now - active.entered_at) / self.t) if active else 0,
+                "total_crossed": snapshot.total_crossed,
+                "cooldown": snapshot.cooldown_remaining,
+                "recent": list(reversed(self.recent_crossings)),
+            }
+
+
+def serve(bind: str, crossing_time: float, max_passes: int, light_ips: dict[str, str],
+          dashboard_port: int | None = None, demo: bool = False):
+    if not demo:
+        for ip in light_ips.values():
+            require_remote(ip)
     service = CoordinatorService(crossing_time, max_passes, light_ips)
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=40),
                          options=(("grpc.so_reuseport", 0),))
     rpc.add_CoordinatorServicer_to_server(service, server)
-    if server.add_insecure_port(bind) == 0:
+    port = server.add_insecure_port(bind)
+    if port == 0:
         raise RuntimeError(f"Cannot bind coordinator to {bind}")
     server.start()
+    address = f"127.0.0.1:{port}" if demo else bind
     LOG.info("COORDINATOR listening on %s | crossing t=%.2fs | max cars=%d",
-             bind, crossing_time, max_passes)
+             address, crossing_time, max_passes)
     LOG.info("Waiting for heartbeats from lights %s. Press Ctrl+C to stop.", light_ips)
+    dashboard = None
+    demo_stop = threading.Event()
+    demo_thread = None
     try:
+        if dashboard_port is not None:
+            from dashboard import start_dashboard
+            dashboard = start_dashboard(service, dashboard_port, address, demo)
+            LOG.info("Open the dashboard at http://127.0.0.1:%d", dashboard.server_port)
+        if demo:
+            from dashboard import run_demo
+            demo_thread = threading.Thread(target=run_demo, args=(port, demo_stop))
+            demo_thread.start()
         server.wait_for_termination()
     except KeyboardInterrupt:
         LOG.info("Stopping coordinator")
+    finally:
+        demo_stop.set()
+        if demo_thread is not None:
+            demo_thread.join()
+        if dashboard is not None:
+            dashboard.shutdown()
+            dashboard.server_close()
         server.stop(2).wait()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run gRPC three-road intersection coordinator")
-    parser.add_argument("--bind", required=True, help="This laptop’s LAN/VPN IPv4 address and port")
-    parser.add_argument("--lights", required=True, nargs=3, metavar="LANE=IP",
+    parser.add_argument("--bind", help="This laptop’s LAN/VPN IPv4 address and port")
+    parser.add_argument("--lights", nargs=3, metavar="LANE=IP",
                         help="IPv4 addresses of the three remote light laptops")
+    parser.add_argument("--dashboard", type=int, metavar="PORT", help="Serve the graphical dashboard on localhost")
+    parser.add_argument("--demo", action="store_true", help="Run a local preview with simulated lights and cars")
     parser.add_argument("--t", type=float, default=3, help="Seconds for one car to cross AND safety clearance")
     parser.add_argument("--max-passes", type=int, default=10, help="Max cars before yielding to another waiting lane")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s", datefmt="%H:%M:%S")
     try:
-        serve(endpoint(args.bind), args.t, args.max_passes, lane_addresses(args.lights, host_ip))
+        if args.dashboard is not None and not 1 <= args.dashboard <= 65535:
+            parser.error("--dashboard requires a port from 1 to 65535")
+        if args.demo:
+            if args.bind or args.lights:
+                parser.error("--demo supplies its own local addresses")
+            serve("127.0.0.1:0", args.t, args.max_passes, dict.fromkeys(LANES, "127.0.0.1"),
+                  args.dashboard or 8080, demo=True)
+        else:
+            if not args.bind or not args.lights:
+                parser.error("--bind and --lights are required for a distributed run")
+            serve(endpoint(args.bind), args.t, args.max_passes, lane_addresses(args.lights, host_ip),
+                  args.dashboard)
     except ValueError as exc:
         parser.error(str(exc))
