@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """One car = one independent process / distributed client node.
 
-A car repeatedly chooses a random road, waits for the light, crosses for t
-seconds, and after a random delay arrives again at a random road.
+A car chooses from its configured roads, waits for the light, crosses for t
+seconds, and after a random delay returns for another visit.
 """
 import argparse
 import random
@@ -36,17 +36,19 @@ def drive(car_id, light_addresses, trips, delay_min, delay_max, poll, seed):
     rng = random.Random(seed)
     channels = {lane: grpc.insecure_channel(address) for lane, address in light_addresses.items()}
     lights = {lane: rpc.TrafficLightStub(channel) for lane, channel in channels.items()}
-    for lane, channel in channels.items():
-        try:
-            grpc.channel_ready_future(channel).result(timeout=12)
-        except grpc.FutureTimeoutError as exc:
-            raise RuntimeError(f"Light {lane} at {light_addresses[lane]} is unreachable") from exc
-    print(f"[{car_id}] Online; connected to lights A, B, C", flush=True)
+    lanes = tuple(lane for lane in LANES if lane in lights)
 
     try:
+        for lane, channel in channels.items():
+            try:
+                grpc.channel_ready_future(channel).result(timeout=12)
+            except grpc.FutureTimeoutError as exc:
+                raise RuntimeError(f"Light {lane} at {light_addresses[lane]} is unreachable") from exc
+        print(f"[{car_id}] Online; connected to {', '.join(lanes)}", flush=True)
+
         for number in range(1, trips + 1):
             time.sleep(rng.uniform(delay_min, delay_max))
-            lane = rng.choice(LANES)
+            lane = rng.choice(lanes)
             trip_id = str(uuid.uuid4())  # Idempotency key for this visit.
             stub = lights[lane]
             arrived = call_with_retry(stub.Arrive,
@@ -94,8 +96,11 @@ def drive(car_id, light_addresses, trips, delay_min, delay_max, poll, seed):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="One independently running vehicle node")
-    parser.add_argument("--lights", required=True, nargs=3, metavar="LANE=IP:PORT",
-                        help="Exactly three reachable light addresses: A=IP:PORT B=IP:PORT C=IP:PORT")
+    routes = parser.add_mutually_exclusive_group(required=True)
+    routes.add_argument("--lights", nargs=3, metavar="LANE=IP:PORT",
+                        help="Choose a random lane each trip using all three light addresses")
+    routes.add_argument("--light", metavar="LANE=IP:PORT",
+                        help="Use this single light for every trip")
     parser.add_argument("--id", default=f"car-{uuid.uuid4().hex[:6]}", help="Human-readable car name")
     parser.add_argument("--trips", type=int, default=5, help="How many times this car returns to the junction")
     parser.add_argument("--delay-min", type=float, default=0.2, help="Minimum random delay before each arrival")
@@ -107,7 +112,14 @@ if __name__ == "__main__":
             args.delay_max < args.delay_min):
         parser.error("Require trips >= 1, poll > 0, and 0 <= delay-min <= delay-max")
     try:
-        drive(args.id, lane_addresses(args.lights, endpoint), args.trips,
+        if args.light is None:
+            addresses = lane_addresses(args.lights, endpoint)
+        else:
+            lane, _, address = args.light.partition("=")
+            if lane not in LANES or not address:
+                parser.error("--light requires A=IP:PORT, B=IP:PORT, or C=IP:PORT")
+            addresses = {lane: endpoint(address)}
+        drive(args.id, addresses, args.trips,
               args.delay_min, args.delay_max, args.poll, args.seed)
     except (ValueError, RuntimeError, grpc.RpcError) as exc:
         print(f"[{args.id}] ERROR: {exc}", file=sys.stderr, flush=True)

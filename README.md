@@ -123,6 +123,14 @@ python vehicle.py --id car-1 --trips 5 --lights A=192.168.1.11:50051 B=192.168.1
 
 Run the same command in another terminal/computer with `--id car-2`, `--id car-3`, etc. Each process has its own connections and its own randomized visits. Use `--delay-min 0 --delay-max 0.5` to create queue contention quickly.
 
+To direct a car to one lane, use `--light`. For example, open a second terminal on the Light A computer and run this using Light A's reachable network IP and port:
+
+```bash
+python vehicle.py --id car-from-A --trips 1 --light A=192.168.1.11:50051
+```
+
+The car can join A's queue even if B or C is offline. The coordinator grants new crossings once all three lights are online.
+
 ## 4. Finding your computer's reachable address
 
 On **macOS Wi-Fi** (typically `en0`):
