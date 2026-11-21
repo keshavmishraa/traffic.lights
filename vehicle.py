@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """One car = one independent process / distributed client node.
 
-A car chooses from its configured roads, waits for the light, crosses for t
+A car chooses an approach and an exit, waits for the light, crosses for t
 seconds, and after a random delay returns for another visit.
 """
 import argparse
@@ -14,7 +14,7 @@ import grpc
 import traffic_pb2 as pb
 import traffic_pb2_grpc as rpc
 
-from network import LANES, endpoint, lane_addresses
+from network import DESTINATIONS, LANES, endpoint, lane_addresses
 
 
 def call_with_retry(method, request):
@@ -49,11 +49,14 @@ def drive(car_id, light_addresses, trips, delay_min, delay_max, poll, seed):
         for number in range(1, trips + 1):
             time.sleep(rng.uniform(delay_min, delay_max))
             lane = rng.choice(lanes)
+            destination = rng.choice(DESTINATIONS[lane])
             trip_id = str(uuid.uuid4())  # Idempotency key for this visit.
             stub = lights[lane]
-            arrived = call_with_retry(stub.Arrive,
-                                      pb.Arrival(lane=lane, car_id=car_id, trip_id=trip_id))
-            print(f"[{car_id}] Visit {number}/{trips}: arrived at {lane} "
+            print(f"[{car_id}] Visit {number}/{trips}: chose lane {destination} as its exit "
+                  f"(from lane {lane})", flush=True)
+            arrived = call_with_retry(stub.Arrive, pb.Arrival(
+                lane=lane, car_id=car_id, trip_id=trip_id, destination_lane=destination))
+            print(f"[{car_id}] Arrived at lane {lane} "
                   f"(queue position {arrived.queue_position})", flush=True)
 
             last_report = None
@@ -63,7 +66,7 @@ def drive(car_id, light_addresses, trips, delay_min, delay_max, poll, seed):
                 permit = call_with_retry(stub.RequestPass,
                                          pb.VehicleRequest(lane=lane, trip_id=trip_id))
                 if permit.granted:
-                    print(f"[{car_id}] ENTER junction from {lane}: "
+                    print(f"[{car_id}] ENTER junction from {lane} toward {destination}: "
                           f"crossing for t={permit.crossing_seconds:.2f}s", flush=True)
                     break
                 if permit.state == "DONE":
@@ -87,7 +90,7 @@ def drive(car_id, light_addresses, trips, delay_min, delay_max, poll, seed):
                     if exc.code() != grpc.StatusCode.FAILED_PRECONDITION:
                         raise
                     time.sleep(0.2)  # clock/network timing: ensure full t elapsed
-            print(f"[{car_id}] EXIT junction from {lane} (visit {number} complete)", flush=True)
+            print(f"[{car_id}] EXIT junction onto lane {destination} (visit {number} complete)", flush=True)
     finally:
         for channel in channels.values():
             channel.close()
@@ -100,7 +103,7 @@ if __name__ == "__main__":
     routes.add_argument("--lights", nargs=3, metavar="LANE=IP:PORT",
                         help="Choose a random lane each trip using all three light addresses")
     routes.add_argument("--light", metavar="LANE=IP:PORT",
-                        help="Use this single light for every trip")
+                        help="Use this light as the approach for every trip")
     parser.add_argument("--id", default=f"car-{uuid.uuid4().hex[:6]}", help="Human-readable car name")
     parser.add_argument("--trips", type=int, default=5, help="How many times this car returns to the junction")
     parser.add_argument("--delay-min", type=float, default=0.2, help="Minimum random delay before each arrival")

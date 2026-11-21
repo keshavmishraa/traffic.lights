@@ -10,6 +10,7 @@ message Arrival {
   string lane = 1;
   string car_id = 2;
   string trip_id = 3;
+  string destination_lane = 4; // An outbound lane other than lane.
 }
 message VehicleRequest {
   string lane = 1;
@@ -50,6 +51,7 @@ message JunctionSnapshot {
   double cooldown_remaining = 5;
   double t_seconds = 6;
   string current_trip = 7;
+  string current_destination_lane = 8;
 }
 
 // The coordinator is authoritative for all synchronization decisions.

@@ -47,9 +47,9 @@ class JunctionHarness:
             self.lights[lane] = rpc.TrafficLightStub(channel)
         self.t = t
 
-    def join(self, lane, name):
+    def join(self, lane, name, destination=""):
         result = self.lights[lane].Arrive(
-            pb.Arrival(lane=lane, car_id=name, trip_id=name), timeout=3)
+            pb.Arrival(lane=lane, car_id=name, trip_id=name, destination_lane=destination), timeout=3)
         assert result.accepted
         return result
 
@@ -135,6 +135,41 @@ class TestDeployment(unittest.TestCase):
 
 
 class TestTrafficLights(unittest.TestCase):
+    def test_destination_survives_queue_crossing_and_retries(self):
+        h = JunctionHarness(t=0.04)
+        try:
+            for invalid in ("A", "D"):
+                with self.subTest(destination=invalid):
+                    with self.assertRaises(grpc.RpcError) as captured:
+                        h.join("A", "car", invalid)
+                    self.assertEqual(captured.exception.code(), grpc.StatusCode.INVALID_ARGUMENT)
+
+            h.join("A", "car", "C")
+            h.join("A", "car", "C")
+            with self.assertRaises(grpc.RpcError) as captured:
+                h.join("A", "car", "B")
+            self.assertEqual(captured.exception.code(), grpc.StatusCode.ALREADY_EXISTS)
+            queue = h.service.dashboard_state()["lanes"][0]["cars"]
+            self.assertEqual(queue, [{"car": "car", "destination_lane": "C"}])
+
+            self.assertTrue(h.request("A", "car").granted)
+            self.assertEqual(h.snap().current_destination_lane, "C")
+            self.assertEqual(h.service.dashboard_state()["current_destination_lane"], "C")
+            time.sleep(0.05)
+            self.assertTrue(h.finish("A", "car").ok)
+            self.assertEqual(h.service.dashboard_state()["recent"], [
+                {"car": "car", "lane": "A", "destination_lane": "C"},
+            ])
+
+            with patch("coordinator.random.choice", return_value="A") as choose:
+                h.join("B", "legacy-car")
+                h.join("B", "legacy-car")
+            choose.assert_called_once_with(("A", "C"))
+            queue = h.service.dashboard_state()["lanes"][1]["cars"]
+            self.assertEqual(queue, [{"car": "legacy-car", "destination_lane": "A"}])
+        finally:
+            h.close()
+
     def test_cooldown_one_green_and_message_exchange(self):
         h = JunctionHarness(t=0.15)
         try:

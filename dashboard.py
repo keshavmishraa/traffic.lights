@@ -3,6 +3,7 @@ from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
+import random
 import threading
 import time
 
@@ -10,20 +11,27 @@ import grpc
 import traffic_pb2 as pb
 import traffic_pb2_grpc as rpc
 
-from network import HEARTBEAT_INTERVAL, LANES
+from network import DESTINATIONS, HEARTBEAT_INTERVAL, LANES
 
 
 def start_dashboard(service, port, coordinator, demo):
-    page = Path(__file__).with_name("dashboard.html").read_bytes()
+    directory = Path(__file__).parent
+    files = {
+        "/": ("text/html", "dashboard.html"),
+        "/dashboard.css": ("text/css", "dashboard.css"),
+        "/dashboard.js": ("text/javascript", "dashboard.js"),
+    }
+    assets = {path: (f"{kind}; charset=utf-8", (directory / name).read_bytes())
+              for path, (kind, name) in files.items()}
 
     class DashboardHandler(BaseHTTPRequestHandler):
         def do_GET(self):
-            if self.path == "/":
-                content_type, body = "text/html; charset=utf-8", page
-            elif self.path == "/state":
+            if self.path == "/state":
                 state = service.dashboard_state()
                 state.update(coordinator=coordinator, demo=demo)
                 content_type, body = "application/json", json.dumps(state).encode()
+            elif self.path in assets:
+                content_type, body = assets[self.path]
             else:
                 self.send_error(404)
                 return
@@ -48,7 +56,9 @@ def run_demo(port, stop):
 
         def join(car, lane, visit):
             trip_id = f"{car}-{visit}"
-            stub.Join(pb.Arrival(lane=lane, car_id=car, trip_id=trip_id), timeout=2)
+            destination = random.choice(DESTINATIONS[lane])
+            stub.Join(pb.Arrival(lane=lane, car_id=car, trip_id=trip_id,
+                                 destination_lane=destination), timeout=2)
             return pb.VehicleRequest(lane=lane, trip_id=trip_id), car, visit
 
         queues = {lane: deque() for lane in LANES}
@@ -66,7 +76,7 @@ def run_demo(port, stop):
             if active and now >= finish_at:
                 request, car, visit = active
                 stub.Finish(request, timeout=2)
-                lane = LANES[(LANES.index(request.lane) + 1) % len(LANES)]
+                lane = random.choice(LANES)
                 queues[lane].append(join(car, lane, visit + 1))
                 active = None
             if active is None:

@@ -4,6 +4,7 @@ import ipaddress
 import socket
 
 LANES = ("A", "B", "C")
+DESTINATIONS = {lane: tuple(other for other in LANES if other != lane) for lane in LANES}
 HEARTBEAT_INTERVAL = 1
 HEARTBEAT_TIMEOUT = 5
 

@@ -16,7 +16,7 @@ CAR N process ---gRPC---> (its chosen light)               serialized decisions
 MONITOR process ---gRPC------------------------------------> snapshot
 ```
 
-Each car **chooses a random road**, joins its lane's FIFO queue, asks for status via gRPC (`car -> light -> coordinator`), requests a crossing permit, spends `t` seconds crossing, notifies completion via gRPC, and returns after a random delay on a **new random road**. A car can make multiple visits; each is identified by a unique `trip_id` for idempotency.
+Each car **chooses a random approach and a random exit from the other two lanes**. It joins the approach lane's FIFO queue, asks for status via gRPC (`car -> light -> coordinator`), requests a crossing permit, spends `t` seconds crossing, and notifies the coordinator when it reaches its exit. After a random delay it returns and chooses another route. A car can make multiple visits; each is identified by a unique `trip_id` for idempotency.
 
 - **Safety:** One lane GREEN at a time. Additionally, the coordinator grants the physical junction to only one car at a time. All critical state changes are protected by one lock.
 - **Switching:** If another lane has waiting cars, the active light changes GREEN to RED either after its queue empties or when **10 cars have completed** during the current green turn (`--max-passes 10`). An in-progress car always finishes first.
@@ -71,7 +71,7 @@ python -m pip install -r requirements.txt
 python coordinator.py --bind 192.168.1.10:50050 --lights A=192.168.1.11 B=192.168.1.12 C=192.168.1.13 --t 3 --max-passes 10 --dashboard 8080
 ```
 
-Open [the graphical dashboard](http://127.0.0.1:8080) in a browser on Laptop 1. The dashboard shows the signal color and heartbeat status of each light computer, waiting cars by lane, the car crossing the junction, and completed crossings.
+Open [the graphical dashboard](http://127.0.0.1:8080) in a browser on Laptop 1. The dashboard shows each light's signal and heartbeat status, each waiting car's chosen exit, the active car moving along its route, and the routes of recent crossings.
 
 **2) Laptop 2: start Light A:**
 
@@ -123,7 +123,7 @@ python vehicle.py --id car-1 --trips 5 --lights A=192.168.1.11:50051 B=192.168.1
 
 Run the same command in another terminal/computer with `--id car-2`, `--id car-3`, etc. Each process has its own connections and its own randomized visits. Use `--delay-min 0 --delay-max 0.5` to create queue contention quickly.
 
-To direct a car to one lane, use `--light`. For example, open a second terminal on the Light A computer and run this using Light A's reachable network IP and port:
+To fix the approach lane, use `--light`. The car still chooses its exit at random from the other two lanes and prints the route for each visit. For example, open a second terminal on the Light A computer and run this using Light A's reachable network IP and port:
 
 ```bash
 python vehicle.py --id car-from-A --trips 1 --light A=192.168.1.11:50051
@@ -180,7 +180,7 @@ The test harness uses local sockets to check the gRPC protocol and simulated net
 | `vehicle.py` | Independently running vehicle node / gRPC client |
 | `spawn_cars.py` | Launch 3+ car processes simultaneously |
 | `monitor.py` | Live gRPC-based terminal dashboard |
-| `dashboard.py`, `dashboard.html` | Coordinator-hosted graphical dashboard and local demo |
+| `dashboard.py`, `dashboard.html`, `dashboard.css`, `dashboard.js` | Coordinator-hosted graphical dashboard and local demo |
 | `network.py` | Validate the LAN addresses used by the coordinator and lights |
 | `test_protocol.py` | Automated integration and safety tests |
 | `requirements.txt` | Runtime libraries |

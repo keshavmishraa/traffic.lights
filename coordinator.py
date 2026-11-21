@@ -17,8 +17,8 @@ import argparse
 from collections import deque
 from concurrent import futures
 from dataclasses import dataclass
-from itertools import islice
 import logging
+import random
 import threading
 import time
 
@@ -26,7 +26,7 @@ import grpc
 import traffic_pb2 as pb
 import traffic_pb2_grpc as rpc
 
-from network import HEARTBEAT_TIMEOUT, LANES, endpoint, host_ip, lane_addresses, require_remote
+from network import DESTINATIONS, HEARTBEAT_TIMEOUT, LANES, endpoint, host_ip, lane_addresses, require_remote
 LOG = logging.getLogger("coordinator")
 
 
@@ -34,6 +34,7 @@ LOG = logging.getLogger("coordinator")
 class Trip:
     lane: str
     car_id: str
+    destination_lane: str
     state: str = "WAITING"  # WAITING -> CROSSING -> DONE
     entered_at: float = 0.0
 
@@ -127,19 +128,26 @@ class CoordinatorService:
         self._require_light(request.lane, context)
         if not request.car_id.strip() or not request.trip_id.strip():
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, "car_id and trip_id are required")
+        destinations = DESTINATIONS[request.lane]
+        destination = request.destination_lane
+        if destination and destination not in destinations:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "destination_lane must be a different lane")
         with self.lock:
             existing = self.trips.get(request.trip_id)
             if existing:
-                if existing.lane != request.lane or existing.car_id != request.car_id:
+                if (existing.lane != request.lane or existing.car_id != request.car_id
+                        or (destination and existing.destination_lane != destination)):
                     context.abort(grpc.StatusCode.ALREADY_EXISTS,
-                                  "trip_id is already used by a different car or lane")
+                                  "trip_id is already used by a different car or route")
                 pos = (list(self.queues[request.lane]).index(request.trip_id) + 1
                        if existing.state == "WAITING" else 0)
                 return pb.JoinReply(accepted=True, message="Already registered", queue_position=pos)
-            self.trips[request.trip_id] = Trip(lane=request.lane, car_id=request.car_id)
+            destination = destination or random.choice(destinations)
+            self.trips[request.trip_id] = Trip(request.lane, request.car_id, destination)
             self.queues[request.lane].append(request.trip_id)
             pos = len(self.queues[request.lane])
-            LOG.info("ARRIVE %-12s lane=%s queue_position=%d", request.car_id, request.lane, pos)
+            LOG.info("ARRIVE %-12s route=%s->%s queue_position=%d",
+                     request.car_id, request.lane, destination, pos)
             self._advance(time.monotonic())
             return pb.JoinReply(accepted=True, message="Queued", queue_position=pos)
 
@@ -191,7 +199,9 @@ class CoordinatorService:
             self.active_trip = None
             self.last_exit_at = now
             self.total_crossed += 1
-            self.recent_crossings.append({"car": trip.car_id, "lane": trip.lane})
+            self.recent_crossings.append({
+                "car": trip.car_id, "lane": trip.lane, "destination_lane": trip.destination_lane,
+            })
             self.passed_this_green += 1
             LOG.info("EXIT   %-12s lane=%s total=%d green_turn_count=%d",
                      trip.car_id, trip.lane, self.total_crossed, self.passed_this_green)
@@ -227,12 +237,12 @@ class CoordinatorService:
                 ) for lane in LANES],
                 current_car=active.car_id if active else "",
                 current_lane=active.lane if active else "",
+                current_destination_lane=active.destination_lane if active else "",
                 current_trip=self.active_trip or "",
                 total_crossed=self.total_crossed,
                 cooldown_remaining=self._cooldown(now) if self.green_lane is None else 0.0,
                 t_seconds=self.t,
             )
-
 
     def dashboard_state(self):
         with self.lock:
@@ -249,12 +259,16 @@ class CoordinatorService:
                     "connection": "Waiting" if heartbeat is None else
                         "Online" if now - heartbeat < HEARTBEAT_TIMEOUT else "Offline",
                     "waiting": light.waiting,
-                    "cars": [self.trips[trip_id].car_id for trip_id in islice(self.queues[light.lane], 6)],
+                    "cars": [{"car": trip.car_id, "destination_lane": trip.destination_lane}
+                             for trip in (self.trips[trip_id] for trip_id in self.queues[light.lane])],
                 })
             return {
                 "lanes": lanes,
                 "current_car": snapshot.current_car,
                 "current_lane": snapshot.current_lane,
+                "current_destination_lane": snapshot.current_destination_lane,
+                "current_trip": snapshot.current_trip,
+                "crossing_seconds": snapshot.t_seconds,
                 "progress": min(1, (now - active.entered_at) / self.t) if active else 0,
                 "total_crossed": snapshot.total_crossed,
                 "cooldown": snapshot.cooldown_remaining,

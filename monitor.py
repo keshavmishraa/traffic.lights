@@ -43,8 +43,10 @@ def main():
                 print(f" Lane {light.lane}  {marker}   Waiting: {light.waiting:2d}  "
                       f"Passed during green: {light.passed_on_green}")
             print("------------------------------------")
-            print(f"Crossing now: {snap.current_car or '(none)'} "
-                  f"{('from lane ' + snap.current_lane) if snap.current_lane else ''}")
+            route = f" | Lane {snap.current_lane}" if snap.current_lane else ""
+            if snap.current_destination_lane:
+                route += f" -> {snap.current_destination_lane}"
+            print(f"Crossing now: {snap.current_car or '(none)'}{route}")
             if snap.cooldown_remaining > 0:
                 print(f"ALL RED: wait {snap.cooldown_remaining:.2f}s for clearance")
             print("Ctrl+C to quit (the simulation keeps running).", flush=True)

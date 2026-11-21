@@ -1,196 +1,78 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Traffic Control | Junction Monitor</title>
-<style>
-:root{color-scheme:dark;--bg:#0c1319;--panel:#121d25;--line:#283841;--muted:#9aadb9;--white:#edf5fa;--green:#7ee6ad;--red:#ff898d}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--white);font:15px system-ui,sans-serif}
-main{width:min(1250px,94%);margin:40px auto}
-header,.heading,.lane-head,.car-row,.metrics{display:flex;align-items:center;justify-content:space-between;gap:14px}
-header{margin-bottom:26px;flex-wrap:wrap}
-h1,h2,p{margin:0} h1{font-size:clamp(30px,5vw,52px);letter-spacing:-.05em} h2{font-size:17px}
-.kicker,.meta,small{color:var(--muted)} .kicker{font-size:12px;text-transform:uppercase;letter-spacing:.16em;font-weight:700}
-#feed,.signal{border:1px solid var(--line);border-radius:7px;padding:6px 10px;font-weight:700;white-space:nowrap}
-#feed[data-live="true"],.signal[data-color="GREEN"],.online{color:var(--green)} .signal[data-color="RED"],.offline{color:var(--red)}
-.metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));margin-bottom:16px}
-.metric,.map,.lane,.recent{background:var(--panel);border:1px solid var(--line);border-radius:12px;min-width:0}
-.metric{padding:15px 18px} .metric strong{display:block;margin-top:5px;font-size:clamp(17px,2.5vw,25px);overflow-wrap:anywhere}
-.layout{display:grid;grid-template-columns:minmax(0,2fr) minmax(235px,1fr);gap:16px;align-items:start}
-.heading{padding:16px 18px;flex-wrap:wrap}
-canvas{display:block;width:100%;height:auto;border-top:1px solid var(--line)}
-.map{overflow:hidden}
-.legend{display:flex;flex-wrap:wrap;gap:16px;padding:13px 18px;color:var(--muted);font-size:13px}
-.legend i{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:6px;background:var(--chip)}
-aside{display:grid;gap:10px}.lane,.recent{padding:13px 16px}
-.lane p{margin:8px 0 0;overflow-wrap:anywhere}
-.car-row{padding-top:8px;overflow-wrap:anywhere}
-@media(max-width:760px){.layout{grid-template-columns:1fr}main{margin:22px auto}.metric{padding:10px}.metrics{gap:7px}}
-</style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Junction Monitor | Traffic Control</title>
+  <link rel="stylesheet" href="/dashboard.css">
+  <script src="/dashboard.js" defer></script>
 </head>
 <body>
-<main>
-<header>
-  <div><p class="kicker">Traffic Control</p><h1>Junction Monitor</h1><p id="coordinator" class="meta">Connecting to coordinator…</p></div>
-  <span id="feed" role="status">Connecting</span>
-</header>
-<section class="metrics" aria-label="Junction totals">
-  <div class="metric"><small>Queued cars</small><strong id="waiting">—</strong></div>
-  <div class="metric"><small>Crossing now</small><strong id="crossing">—</strong></div>
-  <div class="metric"><small>Completed crossings</small><strong id="total">—</strong></div>
-</section>
-<div class="layout">
-  <section class="map">
-    <div class="heading"><h2>Intersection</h2><span id="phase" class="meta">Waiting for data</span></div>
-    <canvas id="map" width="1200" height="900" role="img" aria-label="Top-down view of the three-road junction. Live light and car details are listed alongside the map."></canvas>
-    <div class="legend"><span><i style="--chip:#7abdf1"></i>Queued car</span><span><i style="--chip:#ffc477"></i>Crossing car</span><span><i style="--chip:#7ee6ad"></i>Green light</span><span><i style="--chip:#ff898d"></i>Red light</span></div>
-  </section>
-  <aside aria-label="Lane computers and recent crossings">
-    <div id="lanes" style="display:grid;gap:10px"></div>
-    <section class="recent"><h2>Recent crossings</h2><div id="recent"><p class="car-row meta">No completed crossings yet</p></div></section>
-  </aside>
-</div>
-</main>
-<script>
-const get = id => document.getElementById(id);
-const canvas = get("map");
-const ctx = canvas.getContext("2d");
-const approaches = {
-  A: {x: 0, y: 249, angle: 0, label: [26, 165]},
-  B: {x: 621, y: 234, angle: Math.PI, label: [494, 309]},
-  C: {x: 310, y: 488, angle: -Math.PI / 2, label: [381, 409]},
-};
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span>Traffic Control</span>
+      </div>
+      <span class="feed" id="feed" role="status">Connecting</span>
+    </div>
+  </header>
 
-function rect(x, y, w, h, fill, radius = 0) {
-  ctx.fillStyle = fill;
-  ctx.beginPath();
-  if (radius) ctx.roundRect(x, y, w, h, radius);
-  else ctx.rect(x, y, w, h);
-  ctx.fill();
-}
+  <main>
+    <div class="page-heading">
+      <h1>Junction monitor</h1>
+      <p class="metadata">
+        <span id="coordinator">Connecting to coordinator…</span>
+        <span id="timing" hidden></span>
+      </p>
+    </div>
 
-function label(text, x, y, color, font = "bold 14px system-ui") {
-  ctx.fillStyle = color;
-  ctx.font = font;
-  ctx.fillText(text, x, y);
-}
+    <section class="metrics" aria-label="Junction totals">
+      <div class="metric">
+        <span class="metric-label">Queued vehicles</span>
+        <strong class="metric-value" id="waiting">—</strong>
+      </div>
+      <div class="metric metric-crossing">
+        <span class="metric-label">Crossing now</span>
+        <div class="crossing-value">
+          <strong class="metric-value" id="crossing">—</strong>
+          <span id="crossing-route"></span>
+        </div>
+      </div>
+      <div class="metric">
+        <span class="metric-label">Completed crossings</span>
+        <strong class="metric-value" id="total">—</strong>
+      </div>
+    </section>
 
-function car(x, y, color) {
-  rect(x - 16, y - 8, 32, 16, "#0d141a", 5);
-  rect(x - 15, y - 7, 30, 14, color, 5);
-  rect(x - 3, y - 5, 10, 10, "#243745", 2);
-  rect(x + 11, y - 4, 2, 2, "#fff6d7", 1);
-  rect(x + 11, y + 2, 2, 2, "#fff6d7", 1);
-}
+    <div class="layout">
+      <section class="panel intersection" aria-labelledby="intersection-title">
+        <div class="panel-heading">
+          <h2 id="intersection-title">Live intersection</h2>
+          <span class="phase" id="phase">Waiting for data</span>
+        </div>
+        <canvas id="map" width="1680" height="928" role="img"
+          aria-label="Top-down map with Lane A to the west, B to the east, and C to the south. Lane status lists each vehicle’s destination."></canvas>
+        <div class="legend">
+          <span><i class="legend-car" aria-hidden="true"></i>Queued vehicle</span>
+          <span><i class="legend-route" aria-hidden="true"></i>Active route</span>
+          <span><i class="legend-signal" aria-hidden="true"></i>Green signal</span>
+          <span><i class="legend-signal red" aria-hidden="true"></i>Red signal</span>
+        </div>
+      </section>
 
-function draw(state) {
-  ctx.setTransform(canvas.width / 620, 0, 0, canvas.height / 465, 0, 0);
-  rect(0, 0, 620, 465, "#172827");
-  for (let x = 12; x < 620; x += 20) {
-    for (let y = 12; y < 465; y += 20) rect(x, y, 1.6, 1.6, "#344743", 1);
-  }
-  rect(0, 185, 620, 112, "#526669");
-  rect(251, 296, 118, 169, "#526669");
-  rect(0, 191, 620, 100, "#29363e");
-  rect(257, 285, 106, 180, "#29363e");
-  ctx.strokeStyle = "#91a09c";
-  ctx.lineWidth = 1.5;
-  ctx.setLineDash([12, 10]);
-  ctx.beginPath();
-  ctx.moveTo(0, 242); ctx.lineTo(231, 242);
-  ctx.moveTo(386, 242); ctx.lineTo(620, 242);
-  ctx.moveTo(310, 317); ctx.lineTo(310, 465);
-  ctx.stroke();
-  ctx.setLineDash([]);
+      <aside class="panel lane-panel" aria-labelledby="lanes-title">
+        <div class="panel-heading"><h2 id="lanes-title">Lane status</h2></div>
+        <div id="lanes"><p class="empty lane-empty">Waiting for lane data</p></div>
+      </aside>
 
-  for (const [lane, road] of Object.entries(approaches)) {
-    const light = state?.lanes.find(item => item.lane === lane);
-    label("LANE " + lane, ...road.label, "#e0ece9");
-    ctx.save();
-    ctx.translate(road.x, road.y);
-    ctx.rotate(road.angle);
-    const stop = lane === "C" ? 151 : 236;
-    rect(stop, -17, 3, 37, "#ced9dc");
-    rect(stop - 16, 49, 33, 16, "#131e25", 6);
-    rect(stop - 12, 53, 8, 8, light?.color === "RED" ? "#ff898d" : "#542f38", 4);
-    rect(stop + 6, 53, 8, 8, light?.color === "GREEN" ? "#7ee6ad" : "#2b4f42", 4);
-    const capacity = lane === "C" ? 3 : 5;
-    for (let index = 0; index < Math.min(light?.waiting ?? 0, capacity); index++) {
-      car(stop - 21 - index * 39, lane === "C" ? 24 : 14, "#7abdf1");
-    }
-    if (state?.current_lane === lane) {
-      car(stop + 17 + state.progress * (lane === "C" ? 111 : 126),
-          lane === "C" ? 24 : 14, "#ffc477");
-    }
-    ctx.restore();
-  }
-  if (state?.current_car) label(state.current_car, 25, 432, "#ffc477");
-}
-
-function node(tag, text, className) {
-  const element = document.createElement(tag);
-  element.textContent = text;
-  if (className) element.className = className;
-  return element;
-}
-
-function laneCard(light, demo) {
-  const card = node("section", "", "lane");
-  const header = node("div", "", "lane-head");
-  const signal = node("span", light.color, "signal");
-  signal.dataset.color = light.color;
-  header.append(node("h2", "Lane " + light.lane), signal);
-  const connection = node("p", "", "meta");
-  connection.append(node("span", light.connection, light.connection.toLowerCase()),
-                    " · " + (demo ? "Simulated light" : light.ip));
-  const overflow = light.waiting - light.cars.length;
-  const queued = light.cars.join(", ") + (overflow ? ` +${overflow} more` : "");
-  card.append(header, connection, node("p", `${light.waiting} queued` + (queued ? " · " + queued : "")));
-  return card;
-}
-
-function render(state) {
-  get("coordinator").textContent = (state.demo ? "Local demo · " : "Coordinator · ") + state.coordinator;
-  get("waiting").textContent = state.lanes.reduce((total, lane) => total + lane.waiting, 0);
-  get("crossing").textContent = state.current_car ? `${state.current_car} · ${state.current_lane}` : "None";
-  get("total").textContent = state.total_crossed;
-  const green = state.lanes.find(light => light.color === "GREEN");
-  const missing = state.lanes.some(light => light.connection !== "Online");
-  get("phase").textContent = missing ? "Waiting for light connections" : green ? `Lane ${green.lane} green` :
-    state.cooldown > 0 ? `All red · ${state.cooldown.toFixed(1)} s clearance` : "All red";
-  get("lanes").replaceChildren(...state.lanes.map(light => laneCard(light, state.demo)));
-  const rows = state.recent.map(item => {
-    const row = node("div", "", "car-row");
-    row.append(node("span", item.car), node("small", "Lane " + item.lane));
-    return row;
-  });
-  get("recent").replaceChildren(...(rows.length ? rows : [node("p", "No completed crossings yet", "car-row meta")]));
-  draw(state);
-}
-
-async function refresh() {
-  const feed = get("feed");
-  try {
-    const response = await fetch("/state", {signal: AbortSignal.timeout(3000)});
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const state = await response.json();
-    render(state);
-    const status = state.demo ? "Demo running" : "Live";
-    if (feed.textContent !== status) feed.textContent = status;
-    feed.dataset.live = "true";
-  } catch {
-    const status = "Disconnected · retrying";
-    if (feed.textContent !== status) feed.textContent = status;
-    feed.dataset.live = "false";
-  } finally {
-    setTimeout(refresh, 250);
-  }
-}
-
-draw();
-refresh();
-</script>
+      <section class="panel history" aria-labelledby="history-title">
+        <div class="panel-heading"><h2 id="history-title">Recent crossings</h2></div>
+        <ul id="recent" class="recent-list" aria-label="Completed vehicle routes">
+          <li class="empty">No crossings yet</li>
+        </ul>
+      </section>
+    </div>
+  </main>
 </body>
 </html>
